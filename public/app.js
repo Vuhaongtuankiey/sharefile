@@ -20,13 +20,8 @@ let myName = null;
 let myColor = null;
 let socket = null;
 
-// Map<peerId, RTCPeerConnection>
-const peerConns = new Map();
-// Map<peerId, RTCDataChannel>  (outgoing, for sending)
-const dataChannels = new Map();
-
-// Incoming transfer state (one at a time for simplicity)
-let incoming = null;  // { from, fileName, fileSize, fileType, chunks, received }
+const peerConns = new Map(); // peerId -> RTCPeerConnection
+const dataChannels = new Map(); // peerId -> RTCDataChannel (outgoing)
 
 // ─── DOM refs ─────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
@@ -45,12 +40,14 @@ const modalProgress = $('modalProgress');
 const progressFill = $('progressFill');
 const progressLabel = $('progressLabel');
 const modalActions = $('modalActions');
+const modalSaveActions = $('modalSaveActions');
 const btnAccept = $('btnAccept');
 const btnDecline = $('btnDecline');
+const btnSave = $('btnSave');
 const fileInput = $('fileInput');
 
 // ─── Peer UI registry ─────────────────────────────────────────────────────────
-const peerElements = new Map();  // peerId -> { el, bubbleEl, statusEl }
+const peerElements = new Map(); // peerId -> { el, bubbleEl, statusEl }
 
 // ─── WebSocket connection ─────────────────────────────────────────────────────
 function connect() {
@@ -96,7 +93,6 @@ function setStatus(state, text) {
 // ─── Signaling handler ────────────────────────────────────────────────────────
 async function handleSignal(msg) {
     switch (msg.type) {
-
         case 'welcome':
             myId = msg.id;
             myName = msg.name;
@@ -105,7 +101,6 @@ async function handleSignal(msg) {
             myAvatar.textContent = initials(myName);
             myNameEl.textContent = myName;
             myInfo.style.opacity = '1';
-            // Add existing peers
             (msg.peers || []).forEach(p => { if (p.id !== myId) addPeer(p); });
             updateInstructions();
             break;
@@ -127,19 +122,23 @@ async function handleSignal(msg) {
             updateInstructions();
             break;
 
-        // WebRTC signaling relayed from remote peer
         case 'offer':
             await handleOffer(msg.from, msg.offer);
             break;
 
         case 'answer':
-            await peerConns.get(msg.from)?.setRemoteDescription(new RTCSessionDescription(msg.answer));
+            await peerConns.get(msg.from)?.setRemoteDescription(
+                new RTCSessionDescription(msg.answer)
+            );
             break;
 
         case 'ice-candidate':
             if (msg.candidate) {
-                try { await peerConns.get(msg.from)?.addIceCandidate(new RTCIceCandidate(msg.candidate)); }
-                catch { }
+                try {
+                    await peerConns.get(msg.from)?.addIceCandidate(
+                        new RTCIceCandidate(msg.candidate)
+                    );
+                } catch { }
             }
             break;
     }
@@ -148,8 +147,6 @@ async function handleSignal(msg) {
 // ─── Peer UI ──────────────────────────────────────────────────────────────────
 function addPeer(peer) {
     if (peerElements.has(peer.id)) return;
-
-    // Remove empty state
     document.querySelector('.empty-state')?.remove();
 
     const el = document.createElement('div');
@@ -169,10 +166,7 @@ function addPeer(peer) {
     const bubbleEl = el.querySelector(`#bubble-${peer.id}`);
     const statusEl = el.querySelector(`#status-${peer.id}`);
 
-    // Click to send file
     el.addEventListener('click', () => pickAndSend(peer.id, peer.name));
-
-    // Drag-and-drop onto bubble
     el.addEventListener('dragover', (e) => { e.preventDefault(); bubbleEl.classList.add('dragover'); });
     el.addEventListener('dragleave', () => bubbleEl.classList.remove('dragover'));
     el.addEventListener('drop', (e) => {
@@ -201,7 +195,7 @@ function showEmpty() {
           <path d="M8 12h8M12 8v8"/>
         </svg>
         <h3>No peers found</h3>
-        <p>Open this page on another device connected to the same WiFi network.</p>
+        <p>Open this page on another device connected to the same network.</p>
       </div>`;
     }
 }
@@ -232,7 +226,7 @@ function pickAndSend(peerId, peerName) {
     fileInput.click();
 }
 
-// ─── WebRTC connection setup ──────────────────────────────────────────────────
+// ─── WebRTC connection ────────────────────────────────────────────────────────
 function getOrCreatePC(peerId) {
     if (peerConns.has(peerId)) return peerConns.get(peerId);
 
@@ -251,7 +245,6 @@ function getOrCreatePC(peerId) {
         }
     });
 
-    // Remote DataChannel (receiver side)
     pc.addEventListener('datachannel', (ev) => {
         setupReceiveChannel(ev.channel);
     });
@@ -263,23 +256,20 @@ function getOrCreatePC(peerId) {
 async function sendFileToPeer(peerId, peerName, file) {
     const pc = getOrCreatePC(peerId);
 
-    // Create DataChannel for this transfer
     const channel = pc.createDataChannel('file-transfer');
     dataChannels.set(peerId, channel);
-
     channel.binaryType = 'arraybuffer';
 
     channel.addEventListener('open', () => {
-        // Send metadata header first (JSON string)
-        const meta = JSON.stringify({
+        // 1. Send metadata header
+        channel.send(JSON.stringify({
             type: 'meta',
             name: file.name,
             size: file.size,
             fileType: file.type || 'application/octet-stream',
-        });
-        channel.send(meta);
+        }));
 
-        // Start chunked send
+        // 2. Send file in chunks
         let offset = 0;
         const reader = new FileReader();
 
@@ -294,19 +284,19 @@ async function sendFileToPeer(peerId, peerName, file) {
             const pct = Math.round((offset / file.size) * 100);
             setPeerStatus(peerId, `Sending… ${pct}%`);
             updatePeerRing(peerId, pct);
+
             if (offset < file.size) {
-                // Throttle if buffer is large
                 if (channel.bufferedAmount > CHUNK_SIZE * 4) {
+                    channel.bufferedAmountLowThreshold = CHUNK_SIZE * 2;
                     channel.onbufferedamountlow = () => {
                         channel.onbufferedamountlow = null;
                         readNextChunk();
                     };
-                    channel.bufferedAmountLowThreshold = CHUNK_SIZE * 2;
                 } else {
                     readNextChunk();
                 }
             } else {
-                // Done
+                // 3. Send done signal
                 channel.send(JSON.stringify({ type: 'done' }));
                 setPeerStatus(peerId, '✓ Sent!');
                 updatePeerRing(peerId, -1);
@@ -324,7 +314,6 @@ async function sendFileToPeer(peerId, peerName, file) {
         setTimeout(() => setPeerStatus(peerId, ''), 3000);
     });
 
-    // Create and send offer
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     send({ type: 'offer', to: peerId, offer: pc.localDescription });
@@ -333,7 +322,7 @@ async function sendFileToPeer(peerId, peerName, file) {
     toast(`Sending "${file.name}" to ${peerName}…`, 'info');
 }
 
-// ─── OFFER received (receiver side) ──────────────────────────────────────────
+// ─── OFFER received ──────────────────────────────────────────────────────────
 async function handleOffer(fromId, offer) {
     const pc = getOrCreatePC(fromId);
     await pc.setRemoteDescription(new RTCSessionDescription(offer));
@@ -350,10 +339,49 @@ function setupReceiveChannel(channel) {
     let chunks = [];
     let received = 0;
     let accepted = false;
+    let doneReceived = false;
     let pendingChunks = [];
 
+    // Called when all data is here AND user has accepted.
+    // Stores blob so the Save button can download it on user click.
+    function readyToSave(blob, fileName) {
+        // Store the blob URL on the button so the click handler can use it.
+        const url = URL.createObjectURL(blob);
+        btnSave.onclick = () => {
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = fileName;
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            // Delay revoke so the browser has time to start the download
+            setTimeout(() => URL.revokeObjectURL(url), 30000);
+            closeReceiveModal();
+            toast(`✓ Saved "${fileName}"`, 'success');
+        };
+
+        // Switch modal to "Save File" state
+        modalSubtitle.textContent = 'Transfer complete! Save your file:';
+        modalProgress.style.display = 'none';
+        modalActions.style.display = 'none';
+        modalSaveActions.style.display = 'flex';
+    }
+
+    function tryComplete() {
+        if (!meta || !accepted || !doneReceived) return;
+        try {
+            const blob = new Blob(chunks, { type: meta.fileType });
+            readyToSave(blob, meta.name);
+        } catch (err) {
+            console.error('Blob error:', err);
+            toast('Error preparing file', 'error');
+            closeReceiveModal();
+        }
+        meta = null; chunks = []; received = 0; doneReceived = false;
+    }
+
     channel.addEventListener('message', (ev) => {
-        // JSON messages (meta / done)
         if (typeof ev.data === 'string') {
             let msg;
             try { msg = JSON.parse(ev.data); } catch { return; }
@@ -363,37 +391,31 @@ function setupReceiveChannel(channel) {
                 chunks = [];
                 received = 0;
                 accepted = false;
+                doneReceived = false;
                 pendingChunks = [];
+
                 showReceiveModal(msg, channel, () => {
+                    // User clicked Accept
                     accepted = true;
-                    // Flush any chunks that arrived before accept
+                    // Flush chunks that arrived before accept
                     pendingChunks.forEach(c => {
                         chunks.push(c);
                         received += c.byteLength;
                         updateReceiveProgress(received, meta.size);
                     });
                     pendingChunks = [];
+                    // If 'done' already arrived, finish now
+                    if (doneReceived) tryComplete();
                 });
 
             } else if (msg.type === 'done') {
-                if (!accepted) {
-                    // They never clicked accept — ignore
-                    return;
-                }
-                // Reassemble and download
-                const blob = new Blob(chunks, { type: meta.fileType });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url; a.download = meta.name; a.click();
-                setTimeout(() => URL.revokeObjectURL(url), 10000);
-                closeReceiveModal();
-                toast(`✓ Received "${meta.name}"`, 'success');
-                meta = null; chunks = []; received = 0;
+                doneReceived = true;
+                tryComplete();
             }
             return;
         }
 
-        // ArrayBuffer chunk
+        // ArrayBuffer data chunk
         const chunk = ev.data;
         if (!meta) return;
 
@@ -405,6 +427,12 @@ function setupReceiveChannel(channel) {
         chunks.push(chunk);
         received += chunk.byteLength;
         updateReceiveProgress(received, meta.size);
+
+        // Byte-count fallback in case 'done' message is lost
+        if (received >= meta.size && !doneReceived) {
+            doneReceived = true;
+            tryComplete();
+        }
     });
 
     channel.addEventListener('error', () => {
@@ -414,23 +442,20 @@ function setupReceiveChannel(channel) {
 }
 
 // ─── Receive modal ────────────────────────────────────────────────────────────
-let onAcceptCb = null;
-
 function showReceiveModal(meta, channel, onAccept) {
     const sizeFmt = formatBytes(meta.size);
     modalTitle.textContent = `"${meta.name}"`;
     modalSubtitle.textContent = `${sizeFmt} — Accept to receive`;
     modalProgress.style.display = 'none';
     modalActions.style.display = 'flex';
+    modalSaveActions.style.display = 'none';
     progressFill.style.width = '0%';
     progressLabel.textContent = '0%';
     receiveModal.style.display = 'flex';
 
-    onAcceptCb = onAccept;
-
     btnDecline.onclick = () => {
         channel.close();
-        receiveModal.style.display = 'none';
+        closeReceiveModal();
         toast('Transfer declined', 'info');
     };
 
@@ -438,7 +463,7 @@ function showReceiveModal(meta, channel, onAccept) {
         modalActions.style.display = 'none';
         modalProgress.style.display = 'block';
         modalSubtitle.textContent = 'Receiving…';
-        if (onAcceptCb) { onAcceptCb(); onAcceptCb = null; }
+        onAccept();
     };
 }
 
@@ -450,7 +475,7 @@ function updateReceiveProgress(received, total) {
 
 function closeReceiveModal() {
     receiveModal.style.display = 'none';
-    onAcceptCb = null;
+    btnSave.onclick = null;
 }
 
 // ─── Progress ring on peer bubble ─────────────────────────────────────────────
@@ -458,18 +483,12 @@ function updatePeerRing(peerId, pct) {
     const entry = peerElements.get(peerId);
     if (!entry) return;
     const bubble = entry.bubbleEl;
-
     let svg = bubble.querySelector('.progress-ring-svg');
 
-    if (pct < 0) {
-        // Remove ring
-        svg?.remove();
-        return;
-    }
+    if (pct < 0) { svg?.remove(); return; }
 
     if (!svg) {
-        const r = 63;
-        const circ = 2 * Math.PI * r;
+        const r = 63, circ = 2 * Math.PI * r;
         svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
         svg.setAttribute('class', 'progress-ring-svg');
         svg.setAttribute('viewBox', '0 0 140 140');
@@ -490,23 +509,15 @@ function updatePeerRing(peerId, pct) {
     circle.setAttribute('stroke-dashoffset', String(circ - (pct / 100) * circ));
 }
 
-// ─── Drag-and-drop on window ──────────────────────────────────────────────────
-let dragTarget = null;
-
-document.addEventListener('dragenter', (e) => {
-    e.preventDefault();
-    dropOverlay.classList.add('active');
-});
+// ─── Window drag-and-drop ────────────────────────────────────────────────────
+document.addEventListener('dragenter', (e) => { e.preventDefault(); dropOverlay.classList.add('active'); });
 document.addEventListener('dragover', (e) => e.preventDefault());
 document.addEventListener('dragleave', (e) => {
     if (!e.relatedTarget || e.relatedTarget === document.body) {
         dropOverlay.classList.remove('active');
     }
 });
-document.addEventListener('drop', (e) => {
-    e.preventDefault();
-    dropOverlay.classList.remove('active');
-});
+document.addEventListener('drop', (e) => { e.preventDefault(); dropOverlay.classList.remove('active'); });
 
 // ─── Toast ────────────────────────────────────────────────────────────────────
 function toast(msg, type = 'info') {
