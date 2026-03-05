@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <title>LocalDrop — Share Files Instantly</title>
+  <meta name="description" content="Share files instantly between devices on the same WiFi network. No cloud, no login, just drop." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- Animated background blobs -->
+  <div class="bg-blobs">
+    <div class="blob blob-1"></div>
+    <div class="blob blob-2"></div>
+    <div class="blob blob-3"></div>
+  </div>
+
+  <div class="app">
+    <!-- Header -->
+    <header class="header">
+      <div class="logo">
+        <div class="logo-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+            <path d="M2 17l10 5 10-5"/>
+            <path d="M2 12l10 5 10-5"/>
+          </svg>
+        </div>
+        <span class="logo-text">LocalDrop</span>
+      </div>
+      <div class="connection-status" id="connectionStatus">
+        <div class="status-dot" id="statusDot"></div>
+        <span id="statusText">Connecting…</span>
+      </div>
+    </header>
+
+    <!-- Main content -->
+    <main class="main">
+      <!-- My info chip -->
+      <div class="my-info" id="myInfo" style="opacity:0">
+        <div class="my-avatar" id="myAvatar"></div>
+        <div class="my-details">
+          <span class="my-label">You are</span>
+          <span class="my-name" id="myName">—</span>
+        </div>
+      </div>
+
+      <!-- Instructions -->
+      <p class="instructions" id="instructions">Looking for devices on your network…</p>
+
+      <!-- Peers area -->
+      <div class="peers-container" id="peersContainer">
+        <!-- Peer bubbles injected by JS -->
+      </div>
+
+      <!-- Drop zone overlay (shown during drag) -->
+      <div class="drop-overlay" id="dropOverlay">
+        <div class="drop-overlay-inner">
+          <svg class="drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          <span>Drop to send</span>
+        </div>
+      </div>
+    </main>
+
+    <!-- Toast notifications -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <!-- Receive modal -->
+    <div class="modal-backdrop" id="receiveModal" style="display:none">
+      <div class="modal">
+        <div class="modal-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+        </div>
+        <h2 class="modal-title" id="modalTitle">Incoming file</h2>
+        <p class="modal-subtitle" id="modalSubtitle">Accept to receive</p>
+        <div class="modal-progress" id="modalProgress" style="display:none">
+          <div class="progress-track">
+            <div class="progress-fill" id="progressFill"></div>
+          </div>
+          <span class="progress-label" id="progressLabel">0%</span>
+        </div>
+        <div class="modal-actions" id="modalActions">
+          <button class="btn btn-secondary" id="btnDecline">Decline</button>
+          <button class="btn btn-primary" id="btnAccept">Accept</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Hidden file input -->
+    <input type="file" id="fileInput" multiple style="display:none" />
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
